@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Synthwave Pixel Wave - Refactorizado</title>
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #050014;
+  overflow: hidden;
+  font-family: monospace;
+}
+
+canvas {
+  display: block;
+}
+
+/* CRT scanlines */
+.scanlines::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0,0,0,0.15),
+    rgba(0,0,0,0.15) 1px,
+    rgba(0,0,0,0) 2px,
+    rgba(0,0,0,0) 4px
+  );
+  mix-blend-mode: overlay;
+}
+
+/* VHS flicker */
+@keyframes flicker {
+  0% { opacity: 1; }
+  50% { opacity: 0.97; }
+  100% { opacity: 1; }
+}
+
+body {
+  animation: flicker 0.15s infinite;
+}
+
+/* HUD retro */
+.hud {
+  position: fixed;
+  color: #7ffcff;
+  text-shadow: 0 0 6px #00ffff;
+  font-size: 14px;
+}
+
+.play {
+  top: 10px;
+  left: 10px;
+}
+
+.jp {
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  writing-mode: vertical-rl;
+  font-size: 16px;
+  color: #ff5fd2;
+  text-shadow: 0 0 8px #ff5fd2;
+}
+</style>
+</head>
+
+<body class="scanlines">
+
+<canvas id="c"></canvas>
+
+<div class="hud play">▶ PLAY SYNTHWAVE</div>
+<div class="hud jp">シンセウェーブ</div>
+
+<script>
+// ============================================
+// CLASES PRINCIPALES
+// ============================================
+
+class ColorUtils {
+  static darkenColor(color, amount) {
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+    
+    const newR = Math.floor(r * (1 - amount));
+    const newG = Math.floor(g * (1 - amount));
+    const newB = Math.floor(b * (1 - amount));
+    
+    return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+  }
+
+  static lightenColor(color, amount) {
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+    
+    const newR = Math.min(255, Math.floor(r + (255 - r) * amount));
+    const newG = Math.min(255, Math.floor(g + (255 - g) * amount));
+    const newB = Math.min(255, Math.floor(b + (255 - b) * amount));
+    
+    return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+  }
+
+  static blendColors(color1, color2, ratio) {
+    const r1 = parseInt(color1.slice(1, 3), 16);
+    const g1 = parseInt(color1.slice(3, 5), 16);
+    const b1 = parseInt(color1.slice(5, 7), 16);
+    
+    const r2 = parseInt(color2.slice(1, 3), 16);
+    const g2 = parseInt(color2.slice(3, 5), 16);
+    const b2 = parseInt(color2.slice(5, 7), 16);
+    
+    const r = Math.round(r1 + (r2 - r1) * ratio);
+    const g = Math.round(g1 + (g2 - g1) * ratio);
+    const b = Math.round(b1 + (b2 - b1) * ratio);
+    
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  }
+
+  static darkenAndDesaturate(color, amount) {
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+    
+    const gray = (r + g + b) / 3;
+    
+    const newR = Math.floor(r * (1 - amount) + gray * amount);
+    const newG = Math.floor(g * (1 - amount) + gray * amount);
+    const newB = Math.floor(b * (1 - amount) + gray * amount);
+    
+    const darkR = Math.floor(newR * 0.6);
+    const darkG = Math.floor(newG * 0.6);
+    const darkB = Math.floor(newB * 0.6);
+    
+    return `#${darkR.toString(16).padStart(2, '0')}${darkG.toString(16).padStart(2, '0')}${darkB.toString(16).padStart(2, '0')}`;
+  }
+
+  static getSnowColor(snowDepth) {
+    if (snowDepth > 0.9) return "#ffffff";
+    if (snowDepth > 0.7) return "#f8f8ff";
+    if (snowDepth > 0.5) return "#f0f0ff";
+    if (snowDepth > 0.3) return "#e8e8ff";
+    return "#e0e0ff";
+  }
+
+  static getRockColor(rockHeightRatio) {
+    const baseR = Math.round(42 + rockHeightRatio * 80);
+    const baseB = Math.round(85 + rockHeightRatio * 85);
+    return `#${baseR.toString(16).padStart(2, '0')}00${baseB.toString(16).padStart(2, '0')}`;
+  }
+
+  static getSnowBorderColor(snowDepth) {
+    if (snowDepth > 0.8) return "#d8d8ff";
+    if (snowDepth > 0.5) return "#d0d0ff";
+    return "#c8c8ff";
+  }
+
+  static getSkyColor(skyHeightRatio) {
+    if (skyHeightRatio < 0.3) return "#160033";
+    if (skyHeightRatio < 0.6) return "#0a0033";
+    return "#050014";
+  }
+
+  static getWaterColor(depth) {
+    if (depth < 0.3) return "#0a1a44";
+    if (depth < 0.6) return "#081533";
+    return "#050822";
+  }
+}
+
+class Star {
+  constructor(x, y, size, brightness, twinkleSpeed, colorVariation) {
+    this.x = x;
+    this.y = y;
+    this.size = size;
+    this.brightness = brightness;
+    this.twinkleSpeed = twinkleSpeed;
+    this.colorVariation = colorVariation;
+  }
+
+  getColor(currentTime) {
+    const twinkle = Math.sin(currentTime * this.twinkleSpeed) * 0.3 + 0.7;
+    const currentBrightness = this.brightness * twinkle;
+    
+    if (this.colorVariation < 0.3) {
+      const blueIntensity = Math.floor(200 + currentBrightness * 55);
+      return `rgba(180, 220, ${blueIntensity}, ${currentBrightness})`;
+    } else if (this.colorVariation < 0.6) {
+      const intensity = Math.floor(200 + currentBrightness * 55);
+      return `rgba(${intensity}, ${intensity}, 255, ${currentBrightness})`;
+    } else {
+      const intensity = Math.floor(200 + currentBrightness * 55);
+      return `rgba(${intensity}, ${intensity}, ${intensity}, ${currentBrightness})`;
+    }
+  }
+
+  getCurrentBrightness(currentTime) {
+    const twinkle = Math.sin(currentTime * this.twinkleSpeed) * 0.3 + 0.7;
+    return this.brightness * twinkle;
+  }
+
+  getPixelPosition(pixelSize) {
+    return {
+      x: Math.floor(this.x / pixelSize) * pixelSize,
+      y: Math.floor(this.y / pixelSize) * pixelSize
+    };
+  }
+
+  getPixelSize(pixelSize) {
+    return Math.max(1, Math.floor(this.size * pixelSize / 3));
+  }
+}
+
+class Mountain {
+  constructor(xRatio, widthRatio, heightRatio, snowHeightRatio, colorMod, isFront) {
+    this.xRatio = xRatio;
+    this.widthRatio = widthRatio;
+    this.heightRatio = heightRatio;
+    this.snowHeightRatio = snowHeightRatio;
+    this.colorMod = colorMod;
+    this.isFront = isFront;
+  }
+
+  getPixelData(canvasWidth, maxHeight, baseY, pixelSize) {
+    const centerX = canvasWidth * this.xRatio;
+    const halfWidth = canvasWidth * this.widthRatio / 2;
+    const height = maxHeight * this.heightRatio;
+    const snowEndY = baseY - height + (height * this.snowHeightRatio);
+    
+    return {
+      centerX,
+      halfWidth,
+      height,
+      snowEndY,
+      rows: []
+    };
+  }
+
+  calculateRowData(rowY, canvasWidth, maxHeight, baseY, pixelSize) {
+    const { centerX, halfWidth, height, snowEndY } = this.getPixelData(canvasWidth, maxHeight, baseY, pixelSize);
+    const y = baseY - rowY;
+    
+    if (y < 0 || rowY > height) return null;
+    
+    const rowWidth = (1 - rowY / height) * (halfWidth * 2);
+    const rowStartX = centerX - rowWidth / 2;
+    const rowEndX = centerX + rowWidth / 2;
+    
+    return {
+      y,
+      rowStartX,
+      rowEndX,
+      snowEndY,
+      isSnow: y < snowEndY
+    };
+  }
+
+  getColorAtPosition(y, snowEndY, baseY) {
+    if (y < snowEndY) {
+      const snowDepth = (snowEndY - y) / (snowEndY - (baseY - this.heightRatio));
+      let color = ColorUtils.getSnowColor(snowDepth);
+      return ColorUtils.darkenColor(color, (1 - this.colorMod) * 0.3);
+    } else {
+      const rockHeightRatio = (y - snowEndY) / (baseY - snowEndY);
+      let color = ColorUtils.getRockColor(rockHeightRatio);
+      return ColorUtils.darkenColor(color, (1 - this.colorMod) * 0.4);
+    }
+  }
+
+  getBorderColorAtPosition(y, snowEndY, baseY) {
+    if (y < snowEndY) {
+      const snowDepth = (snowEndY - y) / (snowEndY - (baseY - this.heightRatio));
+      return ColorUtils.getSnowBorderColor(snowDepth);
+    } else {
+      return "#000022";
+    }
+  }
+}
+
+class Sun {
+  constructor() {
+    this.color = "#ff2f92";
+    this.glowColor = "rgba(255, 47, 146, 0.3)";
+  }
+
+  getPosition(canvasWidth, canvasHeight) {
+    return {
+      x: canvasWidth / 2,
+      y: canvasHeight * 0.45,
+      radius: Math.max(80, canvasHeight * 0.15)
+    };
+  }
+
+  getGlowRadius(radius, pixelSize) {
+    return radius + pixelSize * 2;
+  }
+}
+
+class Water {
+  constructor() {
+    this.baseColor = "#050822";
+  }
+
+  getLinePattern(y, time, pixelSize) {
+    return Math.floor((y + Math.sin(time * 0.0005 + y * 0.005) * 1.5) / (pixelSize * 5)) % 4 === 0;
+  }
+
+  getWaveDistortion(x, y, time, pixelSize) {
+    return {
+      x: Math.sin(time * 0.0008 + x * 0.008 + y * 0.015) * pixelSize * 1.5,
+      y: Math.sin(time * 0.001 + x * 0.012) * pixelSize * 0.8
+    };
+  }
+}
+
+// ============================================
+// SISTEMA DE RENDERIZADO
+// ============================================
+
+class Renderer {
+  constructor(canvasId) {
+    this.canvas = document.getElementById(canvasId);
+    this.ctx = this.canvas.getContext("2d");
+    this.offscreenCanvas = document.createElement('canvas');
+    this.offscreenCtx = this.offscreenCanvas.getContext('2d');
+    
+    this.pixelSize = 6;
+    this.baseY = 0;
+    this.maxHeight = 250;
+    
+    this.stars = [];
+    this.mountains = [];
+    this.sun = new Sun();
+    this.water = new Water();
+    
+    this.mountainPixels = [];
+    
+    this.initMountains();
+    this.initEventListeners();
+    this.resize();
+  }
+
+  initMountains() {
+    // Montañas muy lejanas (fondo)
+    this.mountains.push(new Mountain(0.05, 0.15, 0.4, 0.06, 0.5, false));
+    this.mountains.push(new Mountain(0.95, 0.15, 0.4, 0.06, 0.5, false));
+    this.mountains.push(new Mountain(0.15, 0.12, 0.35, 0.05, 0.5, false));
+    this.mountains.push(new Mountain(0.85, 0.12, 0.35, 0.05, 0.5, false));
+    
+    // Montañas medias
+    this.mountains.push(new Mountain(0.25, 0.2, 0.6, 0.12, 0.7, false));
+    this.mountains.push(new Mountain(0.75, 0.2, 0.6, 0.12, 0.7, false));
+    this.mountains.push(new Mountain(0.08, 0.18, 0.55, 0.10, 0.7, false));
+    this.mountains.push(new Mountain(0.92, 0.18, 0.55, 0.10, 0.7, false));
+    
+    // Montañas delanteras (principales)
+    this.mountains.push(new Mountain(0.35, 0.25, 0.7, 0.15, 0.9, true));
+    this.mountains.push(new Mountain(0.65, 0.25, 0.7, 0.15, 0.9, true));
+    this.mountains.push(new Mountain(0.2, 0.4, 1.0, 0.25, 1.0, true));
+    this.mountains.push(new Mountain(0.8, 0.4, 1.0, 0.25, 1.0, true));
+    this.mountains.push(new Mountain(0.1, 0.3, 0.8, 0.18, 0.95, true));
+    this.mountains.push(new Mountain(0.9, 0.3, 0.8, 0.18, 0.95, true));
+    this.mountains.push(new Mountain(0.0, 0.25, 0.6, 0.12, 0.9, true));
+    this.mountains.push(new Mountain(1.0, 0.25, 0.6, 0.12, 0.9, true));
+    
+    // Ordenar por altura para renderizado correcto
+    this.mountains.sort((a, b) => a.heightRatio - b.heightRatio);
+  }
+
+  initEventListeners() {
+    window.addEventListener("resize", () => this.resize());
+  }
+
+  resize() {
+    this.canvas.width = window.innerWidth;
+    this.canvas.height = window.innerHeight;
+    
+    this.pixelSize = Math.max(4, Math.floor(this.canvas.height / 150));
+    this.baseY = this.canvas.height * 0.65;
+    
+    // Configurar canvas offscreen
+    this.offscreenCanvas.width = this.canvas.width;
+    this.offscreenCanvas.height = this.baseY + this.pixelSize * 5;
+    
+    this.createStars();
+  }
+
+  createStars() {
+    this.stars = [];
+    const skyArea = this.canvas.width * this.baseY;
+    const starCount = Math.floor(skyArea / 5000);
+    
+    for (let i = 0; i < starCount; i++) {
+      this.stars.push(new Star(
+        Math.random() * this.canvas.width,
+        Math.random() * this.baseY * 0.8,
+        Math.random() * 1.5 + 0.5,
+        Math.random() * 0.7 + 0.3,
+        Math.random() * 0.002 + 0.001,
+        Math.random()
+      ));
+    }
+  }
+
+  resetMountainPixels() {
+    this.mountainPixels = Array(Math.ceil(this.canvas.width / this.pixelSize)).fill().map(() => 
+      Array(Math.ceil(this.offscreenCanvas.height / this.pixelSize)).fill(false)
+    );
+  }
+
+  isPixelOccupied(x, y) {
+    const gridX = Math.floor(x / this.pixelSize);
+    const gridY = Math.floor(y / this.pixelSize);
+    
+    if (gridX >= 0 && gridX < this.mountainPixels.length && 
+        gridY >= 0 && gridY < this.mountainPixels[0].length) {
+      return this.mountainPixels[gridX][gridY];
+    }
+    return false;
+  }
+
+  markPixelOccupied(x, y) {
+    const gridX = Math.floor(x / this.pixelSize);
+    const gridY = Math.floor(y / this.pixelSize);
+    
+    if (gridX >= 0 && gridX < this.mountainPixels.length && 
+        gridY >= 0 && gridY < this.mountainPixels[0].length) {
+      this.mountainPixels[gridX][gridY] = true;
+    }
+  }
+
+  drawOffscreenPixel(x, y, color) {
+    const gridX = Math.floor(x / this.pixelSize) * this.pixelSize;
+    const gridY = Math.floor(y / this.pixelSize) * this.pixelSize;
+    
+    this.offscreenCtx.fillStyle = color;
+    this.offscreenCtx.fillRect(gridX, gridY, this.pixelSize, this.pixelSize);
+  }
+
+  drawPixel(x, y, color) {
+    const gridX = Math.floor(x / this.pixelSize) * this.pixelSize;
+    const gridY = Math.floor(y / this.pixelSize) * this.pixelSize;
+    
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(gridX, gridY, this.pixelSize, this.pixelSize);
+  }
+
+  drawSky() {
+    const g = this.offscreenCtx.createLinearGradient(0, 0, 0, this.baseY);
+    g.addColorStop(0, "#160033");
+    g.addColorStop(0.5, "#0a0033");
+    g.addColorStop(1, "#050014");
+    this.offscreenCtx.fillStyle = g;
+    this.offscreenCtx.fillRect(0, 0, this.offscreenCanvas.width, this.offscreenCanvas.height);
+  }
+
+  drawStars(time) {
+    this.stars.forEach(star => {
+      const color = star.getColor(time);
+      const { x, y } = star.getPixelPosition(this.pixelSize);
+      const starSize = star.getPixelSize(this.pixelSize);
+      
+      this.offscreenCtx.fillStyle = color;
+      this.offscreenCtx.fillRect(x, y, starSize, starSize);
+      
+      // Destello ocasional
+      if (star.getCurrentBrightness(time) > 0.8 && Math.random() < 0.01) {
+        const flashSize = starSize + Math.floor(this.pixelSize / 2);
+        const flashAlpha = star.getCurrentBrightness(time) * 0.3;
+        this.offscreenCtx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
+        this.offscreenCtx.fillRect(
+          x - Math.floor((flashSize - starSize) / 2),
+          y - Math.floor((flashSize - starSize) / 2),
+          flashSize,
+          flashSize
+        );
+      }
+    });
+  }
+
+  drawSun() {
+    const { x, y, radius } = this.sun.getPosition(this.canvas.width, this.canvas.height);
+    
+    // Dibujar sol
+    for (let dy = -radius; dy < radius; dy += this.pixelSize) {
+      for (let dx = -radius; dx < radius; dx += this.pixelSize) {
+        if (dx * dx + dy * dy < radius * radius) {
+          this.drawOffscreenPixel(x + dx, y + dy, this.sun.color);
+        }
+      }
+    }
+    
+    // Dibujar brillo
+    const glowRadius = this.sun.getGlowRadius(radius, this.pixelSize);
+    for (let dy = -glowRadius; dy < glowRadius; dy += this.pixelSize * 2) {
+      for (let dx = -glowRadius; dx < glowRadius; dx += this.pixelSize * 2) {
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance > radius && distance < glowRadius) {
+          const alpha = 1 - (distance - radius) / (glowRadius - radius);
+          this.offscreenCtx.fillStyle = `rgba(255, 47, 146, ${alpha * 0.3})`;
+          const px = Math.floor((x + dx) / this.pixelSize) * this.pixelSize;
+          const py = Math.floor((y + dy) / this.pixelSize) * this.pixelSize;
+          this.offscreenCtx.fillRect(px, py, this.pixelSize, this.pixelSize);
+        }
+      }
+    }
+  }
+
+  drawMountains() {
+    this.resetMountainPixels();
+    
+    // Dibujar montañas de atrás hacia adelante
+    this.mountains.forEach(mountain => {
+      const { centerX, halfWidth, height, snowEndY } = mountain.getPixelData(
+        this.canvas.width, this.maxHeight, this.baseY, this.pixelSize
+      );
+      
+      for (let rowY = 0; rowY < height; rowY += this.pixelSize) {
+        const rowData = mountain.calculateRowData(
+          rowY, this.canvas.width, this.maxHeight, this.baseY, this.pixelSize
+        );
+        
+        if (!rowData) continue;
+        
+        const color = mountain.getColorAtPosition(rowData.y, snowEndY, this.baseY);
+        
+        // Dibujar esta fila
+        for (let x = rowData.rowStartX; x < rowData.rowEndX; x += this.pixelSize) {
+          if (!this.isPixelOccupied(x, rowData.y)) {
+            this.drawOffscreenPixel(x, rowData.y, color);
+            this.markPixelOccupied(x, rowData.y);
+          }
+        }
+      }
+    });
+    
+    // Dibujar bordes para montañas frontales
+    const frontMountains = this.mountains.filter(m => m.isFront)
+      .sort((a, b) => b.heightRatio - a.heightRatio);
+    
+    frontMountains.forEach(mountain => {
+      const { centerX, halfWidth, height, snowEndY } = mountain.getPixelData(
+        this.canvas.width, this.maxHeight, this.baseY, this.pixelSize
+      );
+      
+      for (let rowY = 0; rowY < height; rowY += this.pixelSize) {
+        const rowData = mountain.calculateRowData(
+          rowY, this.canvas.width, this.maxHeight, this.baseY, this.pixelSize
+        );
+        
+        if (!rowData) continue;
+        
+        const borderColor = mountain.getBorderColorAtPosition(rowData.y, snowEndY, this.baseY);
+        
+        // Borde izquierdo
+        if (!this.isPixelOccupied(rowData.rowStartX - this.pixelSize, rowData.y)) {
+          this.drawOffscreenPixel(rowData.rowStartX, rowData.y, borderColor);
+        }
+        
+        // Borde derecho
+        if (!this.isPixelOccupied(rowData.rowEndX + this.pixelSize, rowData.y)) {
+          this.drawOffscreenPixel(rowData.rowEndX - this.pixelSize, rowData.y, borderColor);
+        }
+        
+        // Borde inferior
+        if (rowY === 0) {
+          for (let x = rowData.rowStartX; x < rowData.rowEndX; x += this.pixelSize) {
+            if (!this.isPixelOccupied(x, rowData.y + this.pixelSize)) {
+              this.drawOffscreenPixel(x, rowData.y + this.pixelSize, "#000022");
+            }
+          }
+        }
+      }
+    });
+  }
+
+  drawSeparationLine() {
+    for (let x = 0; x < this.canvas.width; x += this.pixelSize) {
+      this.drawPixel(x, this.baseY, "#000000");
+      this.drawPixel(x, this.baseY + this.pixelSize, "#000011");
+      this.drawPixel(x, this.baseY + this.pixelSize * 2, "#000022");
+    }
+  }
+
+  getPixelColor(x, y) {
+    if (x < 0 || x >= this.canvas.width || y < 0 || y >= this.offscreenCanvas.height) {
+      const skyHeightRatio = y / this.baseY;
+      return ColorUtils.getSkyColor(skyHeightRatio);
+    }
+    
+    const imageData = this.offscreenCtx.getImageData(Math.floor(x), Math.floor(y), 1, 1);
+    const [r, g, b] = imageData.data;
+    
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  }
+
+  drawWaterReflection(time) {
+    // Dibujar superficie del agua
+    for (let y = this.baseY; y < this.canvas.height; y += this.pixelSize) {
+      const depth = (y - this.baseY) / (this.canvas.height - this.baseY);
+      let waterColor = ColorUtils.getWaterColor(depth);
+      
+      const hasLine = this.water.getLinePattern(y, time, this.pixelSize);
+      const finalColor = hasLine ? ColorUtils.lightenColor(waterColor, 0.05) : waterColor;
+      
+      for (let x = 0; x < this.canvas.width; x += this.pixelSize) {
+        this.drawPixel(x, y, finalColor);
+      }
+    }
+    
+    // Dibujar reflejos
+    for (let y = this.baseY; y < this.canvas.height; y += this.pixelSize) {
+      const reflectedY = this.baseY - (y - this.baseY);
+      
+      if (reflectedY < this.baseY) {
+        for (let x = 0; x < this.canvas.width; x += this.pixelSize) {
+          const wave = this.water.getWaveDistortion(x, y, time, this.pixelSize);
+          const distortedX = Math.floor((x + wave.x) / this.pixelSize) * this.pixelSize;
+          const distortedY = Math.floor((reflectedY + wave.y) / this.pixelSize) * this.pixelSize;
+          
+          let originalColor = this.getPixelColor(distortedX, distortedY);
+          
+          if (originalColor) {
+            const reflectedColor = ColorUtils.darkenAndDesaturate(originalColor, 0.6);
+            const fade = Math.min(1, (this.canvas.height - y) / (this.canvas.height - this.baseY));
+            const finalColor = ColorUtils.blendColors(reflectedColor, this.water.baseColor, fade * 0.8);
+            
+            this.drawPixel(x, y, finalColor);
+          }
+        }
+      }
+    }
+  }
+
+  renderOffscreen(time) {
+    this.offscreenCtx.clearRect(0, 0, this.offscreenCanvas.width, this.offscreenCanvas.height);
+    this.drawSky();
+    this.drawStars(time);
+    this.drawSun();
+    this.drawMountains();
+  }
+
+  render(time) {
+    // Renderizar offscreen
+    this.renderOffscreen(time);
+    
+    // Limpiar canvas principal
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    
+    // Copiar offscreen al canvas principal
+    this.ctx.drawImage(this.offscreenCanvas, 0, 0);
+    
+    // Renderizar elementos dinámicos
+    this.drawSeparationLine();
+    this.drawWaterReflection(time);
+  }
+
+  start() {
+    const loop = (time) => {
+      this.render(time);
+      requestAnimationFrame(loop);
+    };
+    loop(0);
+  }
+}
+
+// ============================================
+// INICIALIZACIÓN
+// ============================================
+
+// Crear y empezar el renderizador
+const renderer = new Renderer("c");
+renderer.start();
+
+</script>
+
+</body>
+</html>
